@@ -12,7 +12,6 @@ from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
 
 # ---------------- GCP AUTH ----------------
-# Make sure you have .streamlit/secrets.toml with [gcp_service_account] as discussed
 gcp_service_account = st.secrets["gcp_service_account"]
 credentials = service_account.Credentials.from_service_account_info(dict(gcp_service_account))
 PROJECT_ID = gcp_service_account["project_id"]
@@ -29,7 +28,6 @@ def call_vertex(prompt: str) -> str:
         response = TEXT_MODEL.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        # Provide a readable error for the UI
         return f"⚠️ Vertex AI error: {e}"
 
 def extract_text(path: str, filename: str) -> str:
@@ -116,7 +114,6 @@ def parse_points(points_text: str):
     return points
 
 def generate_outline_from_desc(description: str, num_items: int = None):
-    # If num_items is None, LLM decides slide count.
     if num_items:
         prompt = f"""Create a PowerPoint outline on: {description}.
 Generate exactly {num_items} content slides (excluding the title slide).
@@ -142,9 +139,6 @@ Slide 1: <Title>
     return parse_points(points_text)
 
 def edit_outline_with_feedback(outline: dict, feedback: str):
-    """
-    Uses the LLM to apply feedback and return an improved outline dict with 'title' and 'slides' keys.
-    """
     outline_text = "\n".join([f"Slide {i+1}: {s['title']}\n{s['description']}" for i, s in enumerate(outline.get("slides", []))])
     prompt = f"""
 You are an assistant improving a PowerPoint outline.
@@ -166,7 +160,6 @@ Task:
 """
     updated = call_vertex(prompt)
     slides = parse_points(updated)
-    # Keep the title (allow the user to change separately in UI), but return slides updated
     return {"title": outline.get("title", ""), "slides": slides}
 
 # ---------------- PPT GENERATOR ----------------
@@ -175,25 +168,18 @@ def clean_title_text(title: str) -> str:
 
 def create_ppt(title, points, filename="output.pptx"):
     prs = Presentation()
-
-    # Brand Colors
     PRIMARY_PURPLE = RGBColor(94, 42, 132)
     SECONDARY_TEAL = RGBColor(0, 185, 163)
     TEXT_DARK = RGBColor(40, 40, 40)
     BG_LIGHT = RGBColor(244, 244, 244)
-
     title = clean_title_text(title)
 
-    # Title Slide
-    slide_layout = prs.slide_layouts[5]  # blank
+    slide_layout = prs.slide_layouts[5]
     slide = prs.slides.add_slide(slide_layout)
     fill = slide.background.fill
     fill.solid()
     fill.fore_color.rgb = PRIMARY_PURPLE
-
-    # Title TextBox
-    left, top, width, height = Inches(1), Inches(2), Inches(8), Inches(3)
-    textbox = slide.shapes.add_textbox(left, top, width, height)
+    textbox = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(8), Inches(3))
     tf = textbox.text_frame
     tf.word_wrap = True
     tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
@@ -205,22 +191,17 @@ def create_ppt(title, points, filename="output.pptx"):
     p.font.color.rgb = RGBColor(255, 255, 255)
     p.alignment = PP_ALIGN.CENTER
 
-    # Content Slides
     for idx, item in enumerate(points, start=1):
         key_point = clean_title_text(item.get("title", ""))
         description = item.get("description", "")
 
         slide = prs.slides.add_slide(prs.slide_layouts[5])
-
-        # Alternate background
         bg_color = BG_LIGHT if idx % 2 == 0 else RGBColor(255, 255, 255)
         fill = slide.background.fill
         fill.solid()
         fill.fore_color.rgb = bg_color
 
-        # Title
-        left, top, width, height = Inches(0.8), Inches(0.5), Inches(8), Inches(1.5)
-        textbox = slide.shapes.add_textbox(left, top, width, height)
+        textbox = slide.shapes.add_textbox(Inches(0.8), Inches(0.5), Inches(8), Inches(1.5))
         tf = textbox.text_frame
         tf.word_wrap = True
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
@@ -232,16 +213,13 @@ def create_ppt(title, points, filename="output.pptx"):
         p.font.color.rgb = PRIMARY_PURPLE
         p.alignment = PP_ALIGN.LEFT
 
-        # Accent underline
         shape = slide.shapes.add_shape(1, Inches(0.8), Inches(1.6), Inches(3), Inches(0.1))
         shape.fill.solid()
         shape.fill.fore_color.rgb = SECONDARY_TEAL
         shape.line.fill.background()
 
-        # Description bullets
         if description:
-            left, top, width, height = Inches(1), Inches(2.2), Inches(5), Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, height)
+            textbox = slide.shapes.add_textbox(Inches(1), Inches(2.2), Inches(5), Inches(4))
             tf = textbox.text_frame
             tf.word_wrap = True
             for line in description.split("\n"):
@@ -252,7 +230,6 @@ def create_ppt(title, points, filename="output.pptx"):
                     bullet.font.color.rgb = TEXT_DARK
                     bullet.level = 0
 
-        # Footer watermark
         textbox = slide.shapes.add_textbox(Inches(0.5), Inches(6.8), Inches(8), Inches(0.3))
         tf = textbox.text_frame
         p = tf.add_paragraph()
@@ -268,20 +245,17 @@ def create_ppt(title, points, filename="output.pptx"):
 st.set_page_config(page_title="AI Productivity Suite", layout="wide")
 st.title("AI Productivity Suite")
 
-# ---------------- STATE ----------------
 defaults = {
-    "messages": [],            # general chat
-    "outline_chat": None,      # ppt outline
-    "generated_files": [],     # past generated files
-    "summary_text": None,      # uploaded doc summary
-    "summary_title": None,     # uploaded doc title
-    "doc_chat_history": [],    # chat with doc
+    "messages": [],
+    "outline_chat": None,
+    "summary_text": None,
+    "summary_title": None,
+    "doc_chat_history": [],
 }
 for key, val in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-# ---------------- DISPLAY PAST CHAT ----------------
 for role, content in st.session_state.messages:
     with st.chat_message(role):
         st.markdown(content)
@@ -290,9 +264,7 @@ for role, content in st.session_state.doc_chat_history:
     with st.chat_message(role):
         st.markdown(content)
 
-# ---------------- FILE UPLOAD SECTION ----------------
 uploaded_file = st.file_uploader("📂 Upload a document", type=["pdf", "docx", "txt"])
-
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(uploaded_file.getvalue())
@@ -305,32 +277,21 @@ if uploaded_file is not None:
     if not text or not text.strip():
         st.error("Unsupported, empty, or unreadable file content.")
     else:
-        try:
-            summary = summarize_long_text(text)
-            title = generate_title(summary) or os.path.splitext(uploaded_file.name)[0]
-            st.session_state.summary_text = summary
-            st.session_state.summary_title = title
-            st.success(f"✅ Document uploaded! Suggested Title: **{st.session_state.summary_title}**. You can now chat with it.")
-        except Exception as e:
-            st.error(f"Summarization failed: {e}")
+        summary = summarize_long_text(text)
+        title = generate_title(summary) or os.path.splitext(uploaded_file.name)[0]
+        st.session_state.summary_text = summary
+        st.session_state.summary_title = title
+        st.success(f"✅ Document uploaded! Suggested Title: **{title}**")
 
-# ---------------- ONE CHAT INPUT ----------------
 if prompt := st.chat_input("💬 Type a message (general chat or ask about uploaded doc)..."):
-
     if st.session_state.summary_text:
-        # Doc chat mode
         if any(word in prompt.lower() for word in ["ppt", "slides", "presentation"]):
-            # User asked for PPT from doc → generate ppt outline
-            with st.spinner("Generating PPT outline from uploaded document..."):
-                outline = generate_outline_from_desc(st.session_state.summary_text + "\n\n" + prompt)
-                outline_data = {"title": st.session_state.summary_title, "slides": outline}
-                st.session_state.outline_chat = outline_data
-                st.session_state.doc_chat_history.append(("assistant", "✅ Generated PPT outline from document. Preview below."))
+            outline = generate_outline_from_desc(st.session_state.summary_text + "\n\n" + prompt)
+            st.session_state.outline_chat = {"title": st.session_state.summary_title, "slides": outline}
+            st.session_state.doc_chat_history.append(("assistant", "✅ Generated PPT outline from document. Preview below."))
         else:
-            # Normal doc chat
             st.session_state.doc_chat_history.append(("user", prompt))
-            try:
-                resp = call_vertex(f"""
+            resp = call_vertex(f"""
 You are an assistant answering based only on the provided document.
 Document:
 {st.session_state.summary_text}
@@ -340,30 +301,18 @@ Question:
 
 Answer clearly and concisely using only the document content.
 """)
-                st.session_state.doc_chat_history.append(("assistant", resp))
-            except Exception as e:
-                st.session_state.doc_chat_history.append(("assistant", f"⚠️ Backend error: {e}"))
-
+            st.session_state.doc_chat_history.append(("assistant", resp))
     else:
-        # Normal chat / PPT requests
         st.session_state.messages.append(("user", prompt))
-        text = prompt.lower()
-
-        try:
-            if "ppt" in text or "presentation" in text or "slides" in text:
-                with st.spinner("Generating PPT outline..."):
-                    outline = generate_outline_from_desc(prompt)
-                    st.session_state.outline_chat = {"title": generate_title(prompt), "slides": outline}
-                    st.session_state.messages.append(("assistant", "✅ PPT outline generated! Preview below."))
-            else:
-                bot_reply = call_vertex(prompt)
-                st.session_state.messages.append(("assistant", bot_reply))
-        except Exception as e:
-            st.session_state.messages.append(("assistant", f"⚠️ Backend error: {e}"))
-
+        if any(word in prompt.lower() for word in ["ppt", "slides", "presentation"]):
+            outline = generate_outline_from_desc(prompt)
+            st.session_state.outline_chat = {"title": generate_title(prompt), "slides": outline}
+            st.session_state.messages.append(("assistant", "✅ PPT outline generated! Preview below."))
+        else:
+            reply = call_vertex(prompt)
+            st.session_state.messages.append(("assistant", reply))
     st.rerun()
 
-# ---------------- OUTLINE PREVIEW + ACTIONS ----------------
 if st.session_state.outline_chat:
     outline = st.session_state.outline_chat
     st.subheader(f"📝 Preview Outline: {outline.get('title','Untitled')}")
@@ -371,45 +320,30 @@ if st.session_state.outline_chat:
         with st.expander(f"Slide {idx}: {slide.get('title', f'Slide {idx}')}", expanded=False):
             st.markdown(slide.get("description", "").replace("\n", "\n\n"))
 
-    # Title edit + feedback area
     new_title = st.text_input("📌 Edit Title", value=outline.get("title", "Untitled"))
     feedback_box = st.text_area("✏️ Feedback for outline (optional):", value="")
 
     col1, col2 = st.columns(2)
-
     with col1:
         if st.button("🔄 Apply Feedback"):
             if not feedback_box.strip():
                 st.warning("Add feedback text before applying.")
             else:
                 with st.spinner("Applying feedback to the outline..."):
-                    try:
-                        updated = edit_outline_with_feedback(outline, feedback_box)
-                        # allow title change
-                        updated["title"] = new_title.strip() if new_title.strip() else updated.get("title", "")
-                        st.session_state.outline_chat = updated
-                        st.success("✅ Outline updated with feedback!")
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.error(f"❌ Edit failed: {e}")
+                    updated = edit_outline_with_feedback(outline, feedback_box)
+                    updated["title"] = new_title.strip() if new_title.strip() else updated.get("title", "")
+                    st.session_state.outline_chat = updated
+                    st.success("✅ Outline updated with feedback!")
+                    st.rerun()
 
     with col2:
         if st.button("✅ Generate PPT"):
             with st.spinner("Generating PPT..."):
-                try:
-                    outline_to_send = copy.deepcopy(outline)
-                    outline_to_send["title"] = new_title.strip() if new_title else outline_to_send["title"]
-
-                    filename = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', outline_to_send['title'])}.pptx"
-                    ppt_path = create_ppt(outline_to_send["title"], outline_to_send["slides"], filename)
-                    with open(ppt_path, "rb") as f:
-                        st.download_button(
-                            "⬇️ Download PPT",
-                            data=f,
-                            file_name=filename,
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        )
-                    st.session_state.outline_chat = None
-                    st.success("✅ PPT generated and ready to download.")
-                except Exception as e:
-                    st.error(f"❌ PPT generation error: {e}")
+                outline_to_send = copy.deepcopy(outline)
+                outline_to_send["title"] = new_title.strip() if new_title else outline_to_send["title"]
+                filename = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', outline_to_send['title'])}.pptx"
+                ppt_path = create_ppt(outline_to_send["title"], outline_to_send["slides"], filename)
+                with open(ppt_path, "rb") as f:
+                    st.download_button("⬇️ Download PPT", f, file_name=filename)
+                st.session_state.outline_chat = None
+                st.success("✅ PPT generated and ready to download.")
