@@ -189,8 +189,8 @@ def create_ppt(title, points, filename="output.pptx"):
     return filename
 
 # ---------------- STREAMLIT UI ----------------
-st.set_page_config(page_title="AI Productivity Suite", layout="wide")
-st.title("AI Productivity Suite")
+st.set_page_config(page_title="PPT Generator", layout="wide")
+st.title("PPT Generator")
 
 # ---- STATE ----
 if "messages" not in st.session_state:
