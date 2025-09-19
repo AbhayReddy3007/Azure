@@ -1,22 +1,24 @@
-import os, re, tempfile, base64, datetime
-import fitz, docx, requests
+import os, re, tempfile, copy
+import fitz, docx
+import streamlit as st
 from pptx import Presentation
 from pptx.util import Pt, Inches
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE, MSO_VERTICAL_ANCHOR
 from PIL import Image
-import streamlit as st
-from vertexai.generative_models import GenerativeModel
 import vertexai
+from vertexai.generative_models import GenerativeModel
+from google.oauth2 import service_account
 
-# ---------------- CONFIG ----------------
-PROJECT_ID = "drl-zenai-prod"  
+# ---------------- GCP AUTH ----------------
+gcp_service_account = st.secrets["gcp_service_account"]
+credentials = service_account.Credentials.from_service_account_info(dict(gcp_service_account))
+PROJECT_ID = gcp_service_account["project_id"]
 REGION = "us-central1"
-vertexai.init(project=PROJECT_ID, location=REGION)
+vertexai.init(project=PROJECT_ID, location=REGION, credentials=credentials)
 
 TEXT_MODEL_NAME = "gemini-2.0-flash"
 TEXT_MODEL = GenerativeModel(TEXT_MODEL_NAME)
-
 
 # ---------------- HELPERS ----------------
 def call_vertex(prompt: str) -> str:
@@ -110,17 +112,7 @@ Slide 1: <Title>
 def clean_title_text(title: str) -> str:
     return re.sub(r"\s+", " ", title.strip()) if title else "Presentation"
 
-def resize_image(image_path, max_width=800, max_height=600):
-    try:
-        img = Image.open(image_path)
-        img.thumbnail((max_width, max_height))
-        resized_path = image_path.replace(".png", "_resized.png")
-        img.save(resized_path, "PNG")
-        return resized_path
-    except Exception:
-        return image_path
-
-def create_ppt(title, points, filename="output.pptx", images=None):
+def create_ppt(title, points, filename="output.pptx"):
     prs = Presentation()
     PRIMARY_PURPLE = RGBColor(94, 42, 132)
     SECONDARY_TEAL = RGBColor(0, 185, 163)
@@ -196,13 +188,28 @@ def create_ppt(title, points, filename="output.pptx", images=None):
     prs.save(filename)
     return filename
 
-
 # ---------------- STREAMLIT UI ----------------
 st.set_page_config(page_title="AI Productivity Suite", layout="wide")
 st.title("AI Productivity Suite")
 
+# ---- STATE ----
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "outline_chat" not in st.session_state:
+    st.session_state.outline_chat = None
+if "summary_text" not in st.session_state:
+    st.session_state.summary_text = None
+if "summary_title" not in st.session_state:
+    st.session_state.summary_title = None
+
+# ---- Display past chat ----
+for role, content in st.session_state.messages:
+    with st.chat_message(role):
+        st.markdown(content)
+
+# ---- File upload ----
 uploaded_file = st.file_uploader("📂 Upload a document", type=["pdf", "docx", "txt"])
-if uploaded_file:
+if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
@@ -212,19 +219,46 @@ if uploaded_file:
     if text:
         summary = summarize_long_text(text)
         title = generate_title(summary)
-        st.success(f"✅ Document uploaded! Suggested title: **{title}**")
+        st.session_state.summary_text = summary
+        st.session_state.summary_title = title
+        st.success(f"✅ Document uploaded! Suggested Title: **{title}**")
 
-        if st.button("📑 Generate PPT Outline"):
-            outline = generate_outline_from_desc(summary)
-            st.subheader(f"Outline: {title}")
-            for i, slide in enumerate(outline, start=1):
-                st.markdown(f"**Slide {i}: {slide['title']}**")
-                st.markdown(slide["description"].replace("\n", "\n\n"))
-
-            if st.button("🎯 Generate PPT"):
-                filename = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', title)}.pptx"
-                ppt_path = create_ppt(title, outline, filename)
-                with open(ppt_path, "rb") as f:
-                    st.download_button("⬇️ Download PPT", f, file_name=filename)
+# ---- Chat input ----
+if prompt := st.chat_input("💬 Type a message (general chat or ask about uploaded doc)..."):
+    if st.session_state.summary_text:
+        if any(word in prompt.lower() for word in ["ppt", "slides", "presentation"]):
+            # Generate PPT outline from doc
+            outline = generate_outline_from_desc(st.session_state.summary_text + "\n\n" + prompt)
+            st.session_state.outline_chat = {"title": st.session_state.summary_title, "slides": outline}
+            st.session_state.messages.append(("assistant", "✅ Generated PPT outline from document. Preview below."))
+        else:
+            # Chat with doc
+            reply = call_vertex(f"Answer based only on this document:\n\n{st.session_state.summary_text}\n\nQ: {prompt}")
+            st.session_state.messages.append(("user", prompt))
+            st.session_state.messages.append(("assistant", reply))
     else:
-        st.error("❌ Could not read file content.")
+        if any(word in prompt.lower() for word in ["ppt", "slides", "presentation"]):
+            outline = generate_outline_from_desc(prompt)
+            st.session_state.outline_chat = {"title": generate_title(prompt), "slides": outline}
+            st.session_state.messages.append(("assistant", "✅ PPT outline generated! Preview below."))
+        else:
+            reply = call_vertex(prompt)
+            st.session_state.messages.append(("user", prompt))
+            st.session_state.messages.append(("assistant", reply))
+    st.rerun()
+
+# ---- Outline preview ----
+if st.session_state.outline_chat:
+    outline = st.session_state.outline_chat
+    st.subheader(f"📝 Outline Preview: {outline['title']}")
+    for i, slide in enumerate(outline["slides"], start=1):
+        with st.expander(f"Slide {i}: {slide['title']}", expanded=False):
+            st.markdown(slide["description"].replace("\n", "\n\n"))
+
+    new_title = st.text_input("📌 Edit Title", value=outline.get("title", "Untitled"))
+    if st.button("✅ Generate PPT"):
+        filename = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', new_title)}.pptx"
+        ppt_path = create_ppt(new_title, outline["slides"], filename)
+        with open(ppt_path, "rb") as f:
+            st.download_button("⬇️ Download PPT", f, file_name=filename)
+        st.session_state.outline_chat = None
