@@ -1,0 +1,6 @@
+streamlit
+python-docx
+pymupdf
+python-pptx
+pillow
+google-cloud-aiplatform
